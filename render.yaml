@@ -82,6 +82,13 @@ services:
           property: password
       - key: DB_POSTGRESDB_SSL_ENABLED
         value: "true"
+      # fromDatabase's `host` resolves to Render's internal network hostname,
+      # which serves an internally-issued cert not in Node's public CA trust
+      # store -- hence "self-signed certificate" on connect. The connection
+      # is still encrypted; this only disables chain verification against
+      # the public CA store, which doesn't apply on Render's private network.
+      - key: DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED
+        value: "false"
       - key: MEDIA_WORKER_BASE_URL
         fromService:
           type: web
