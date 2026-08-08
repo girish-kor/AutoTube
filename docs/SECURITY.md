@@ -1,5 +1,11 @@
 # SECURITY
 
+## 0. Reporting a Vulnerability
+
+Please **do not** open a public GitHub issue for a security vulnerability. Instead, use GitHub's private vulnerability reporting: go to the [Security tab](https://github.com/girish-kor/AutoTube/security/advisories/new) and click "Report a vulnerability". This opens a private advisory visible only to the maintainer until a fix is ready.
+
+Include what you'd include in a bug report: affected component, reproduction steps, and impact. Expect an initial response within a few days — this is a single-operator project (see `docs/PRD.md`), not a funded security team, so response times are best-effort.
+
 ## 1. Secrets Handling
 
 - All credentials (YouTube OAuth2, Gemini API key, Meta/TikTok tokens, Telegram bot token, AudD key, Postgres password) live **only** in n8n's built-in encrypted credential store or the Docker Compose `.env` file (`CONFIG.md`).
