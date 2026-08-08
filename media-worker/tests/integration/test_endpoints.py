@@ -14,6 +14,7 @@ from app import caption as caption_module
 from app import image as image_module
 from app import thumbnail as thumbnail_module
 from app import tts as tts_module
+from app import main as main_module
 from app.config import MEDIA_ROOT
 from app.main import app
 
@@ -40,6 +41,28 @@ def test_healthz():
     resp = client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
+
+
+def test_healthz_exempt_from_api_key(monkeypatch):
+    monkeypatch.setattr(main_module, "MEDIA_WORKER_API_KEY", "secret-key")
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+
+
+def test_api_key_required_when_configured(monkeypatch):
+    monkeypatch.setattr(main_module, "MEDIA_WORKER_API_KEY", "secret-key")
+    resp = client.post("/compliance-scan", json={"video_id": "vid-auth-1", "assets": []})
+    assert resp.status_code == 401
+
+
+def test_api_key_accepted_when_matching(monkeypatch):
+    monkeypatch.setattr(main_module, "MEDIA_WORKER_API_KEY", "secret-key")
+    resp = client.post(
+        "/compliance-scan",
+        json={"video_id": "vid-auth-2", "assets": []},
+        headers={"X-API-Key": "secret-key"},
+    )
+    assert resp.status_code == 200
 
 
 def test_compliance_scan_endpoint_passes():

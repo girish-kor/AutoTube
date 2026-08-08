@@ -1,0 +1,146 @@
+# Render Blueprint — deploys AutoTube's n8n orchestrator and media-worker as
+# standalone web services against the existing `autotube-db` Postgres
+# instance (docs/DEPLOYMENT.md documents the Docker Compose self-hosted
+# alternative; this is an additive option, not a replacement).
+#
+# Free-tier caveats (accepted per project decision, see PR description):
+#   - Both web services sleep after 15 min of inactivity (cold start on the
+#     next request/webhook).
+#   - Render's free plan gives no persistent disk, so files media-worker
+#     writes under MEDIA_ROOT do NOT survive a restart/redeploy/sleep cycle.
+#     n8n itself doesn't need local disk — DB_TYPE=postgresdb means all its
+#     state (workflows, credentials, executions) lives in Postgres, not on
+#     the container filesystem.
+#   - The free Postgres database expires 30 days after creation and must be
+#     renewed from the Render dashboard.
+#
+# After connecting this Blueprint (Render Dashboard -> New -> Blueprint ->
+# select this repo), fill in the `sync: false` env vars for each service —
+# Render prompts for these during the Blueprint's first apply since their
+# values are deliberately not committed to this file.
+
+databases:
+  - name: autotube-db
+    databaseName: autotube
+    user: autotube
+    plan: free
+    region: singapore
+
+services:
+  - type: web
+    name: autotube-n8n
+    runtime: image
+    plan: free
+    region: singapore
+    image:
+      url: docker.io/n8nio/n8n:latest
+    envVars:
+      - key: PORT
+        value: "5678"
+      - key: N8N_PORT
+        value: "5678"
+      - key: N8N_PROTOCOL
+        value: https
+      - key: N8N_HOST
+        fromService:
+          type: web
+          name: autotube-n8n
+          property: host
+      - key: GENERIC_TIMEZONE
+        value: Asia/Kolkata
+      - key: EXECUTIONS_DATA_PRUNE
+        value: "true"
+      - key: EXECUTIONS_DATA_MAX_AGE
+        value: "336"
+      - key: N8N_ENCRYPTION_KEY
+        generateValue: true
+      - key: N8N_BASIC_AUTH_ACTIVE
+        value: "true"
+      - key: N8N_BASIC_AUTH_USER
+        value: admin
+      - key: N8N_BASIC_AUTH_PASSWORD
+        generateValue: true
+      - key: DB_TYPE
+        value: postgresdb
+      - key: DB_POSTGRESDB_DATABASE
+        value: n8n
+      - key: DB_POSTGRESDB_HOST
+        fromDatabase:
+          name: autotube-db
+          property: host
+      - key: DB_POSTGRESDB_PORT
+        fromDatabase:
+          name: autotube-db
+          property: port
+      - key: DB_POSTGRESDB_USER
+        fromDatabase:
+          name: autotube-db
+          property: user
+      - key: DB_POSTGRESDB_PASSWORD
+        fromDatabase:
+          name: autotube-db
+          property: password
+      - key: DB_POSTGRESDB_SSL_ENABLED
+        value: "true"
+      - key: MEDIA_WORKER_BASE_URL
+        fromService:
+          type: web
+          name: autotube-media-worker
+          property: hostport
+      # Filled in manually post-apply (docs/CONFIG.md) — never committed:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: GEMINI_RPM_LIMIT
+        value: "15"
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: META_APP_ID
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_IG_USER_ID
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: AUDD_API_KEY
+        sync: false
+      - key: MAX_CONCURRENT_VIDEOS
+        value: "3"
+      - key: VISUAL_BATCH_SIZE
+        value: "3"
+      - key: MAX_RETRIES
+        value: "5"
+      - key: SHORTS_PER_VIDEO
+        value: "3"
+      - key: TEST_MODE
+        value: "false"
+
+  - type: web
+    name: autotube-media-worker
+    runtime: docker
+    plan: free
+    region: singapore
+    rootDir: media-worker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: MEDIA_ROOT
+        value: /data/autotube
+      - key: WHISPER_MODEL_SIZE
+        value: small
+      - key: TTS_DEFAULT_VOICE
+        value: en-US-AndrewNeural
+      - key: MEDIA_WORKER_API_KEY
+        generateValue: true
+      # Filled in manually post-apply (docs/CONFIG.md) — never committed:
+      - key: AUDD_API_KEY
+        sync: false
