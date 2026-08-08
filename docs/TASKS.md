@@ -11,7 +11,7 @@ Ordered so each phase is independently testable before the next depends on it. R
 - [ ] T0.5 Create Telegram bot via BotFather, get `TELEGRAM_BOT_TOKEN` + chat ID (`CONFIG.md`)
 - [ ] T0.6 (If cross-posting in scope) Submit Meta Developer App for Instagram Content Publishing review (`README.md`) — start early, review can take days
 - [ ] T0.7 (If cross-posting in scope) Submit TikTok Developer App for Content Posting API approval (`README.md`) — start early
-- [ ] T0.8 Provision Oracle Cloud "Always Free" ARM VM (or designate operator PC), install Docker + Docker Compose (`DEPLOYMENT.md` §1)
+- [x] T0.8 Provision Oracle Cloud "Always Free" ARM VM (or designate operator PC), install Docker + Docker Compose (`DEPLOYMENT.md` §1) — designated operator PC (Windows/Docker Desktop); Docker + Compose confirmed installed and working (`postgres`, `media-worker`, `n8n` containers running)
 - [ ] T0.9 Point a domain/subdomain's DNS A record at the host (required for Caddy's automatic TLS + OAuth HTTPS redirect)
 
 ## Phase 1 — Infrastructure Skeleton
@@ -20,7 +20,7 @@ Ordered so each phase is independently testable before the next depends on it. R
 - [x] T1.2 Write Postgres init script creating both `n8n` and `autotube` databases (`DEPLOYMENT.md` §2)
 - [x] T1.3 Write full DDL migration `0001_init_schema.sql` covering all tables/enums/triggers (`DATABASE.md`)
 - [x] T1.4 Write `0001_seed_config.sql` seeding `config` defaults (scoring weights, batch sizes) (`DATABASE.md` §12)
-- [ ] T1.5 Stand up stack (`postgres`, `migrate`, `n8n`, `caddy`); confirm n8n reachable over HTTPS (`DEPLOYMENT.md` §4 steps 1–4)
+- [ ] T1.5 Stand up stack (`postgres`, `migrate`, `n8n`, `caddy`); confirm n8n reachable over HTTPS (`DEPLOYMENT.md` §4 steps 1–4) — `postgres`/`migrate`/`media-worker`/`caddy` are up and healthy (Caddy's crash-loop on unset `N8N_HOST` fixed, see git history); `n8n` itself is still crash-looping on a stale `N8N_ENCRYPTION_KEY` baked into the `n8n_data` volume from an earlier boot — needs a one-time operator action to clear it (see PR description) before this can be marked done
 - [ ] T1.6 Complete n8n owner setup, create all 7 credentials (`DEPLOYMENT.md` §4 step 6, `CONFIG.md` §2)
 - [ ] T1.7 Seed initial `channels` row (`DEPLOYMENT.md` §4 step 7)
 
@@ -36,7 +36,7 @@ Ordered so each phase is independently testable before the next depends on it. R
 - [x] T2.8 Implement `/compliance-scan` endpoint (AudD client + provenance check) (`N8N_NODES.md` workflow 12)
 - [x] T2.9 Unit tests for all 7 endpoints' internal logic (`TESTING.md` §2)
 - [x] T2.10 Integration tests against a mocked-external test profile (`TESTING.md` §4)
-- [ ] T2.11 Add `media-worker` service to Compose stack, confirm reachable internally from n8n (`DEPLOYMENT.md` §2)
+- [x] T2.11 Add `media-worker` service to Compose stack, confirm reachable internally from n8n (`DEPLOYMENT.md` §2) — verified live: `docker exec autotube-n8n-1 wget -qO- http://media-worker:8000/healthz` → `{"ok":true}`
 
 ## Phase 3 — Core Content Pipeline Workflows (build + test in stage order; each depends on the previous producing valid fixture data)
 
