@@ -2,7 +2,7 @@
 
 > A fully automated, ₹0-recurring-cost pipeline that discovers topics, writes and fact-checks scripts, generates voice/visuals, renders video, and publishes long-form + Shorts to YouTube — unattended, on a schedule.
 
-![status](https://img.shields.io/badge/status-in%20development-yellow) ![license](https://img.shields.io/badge/license-TBD-lightgrey) ![stack](https://img.shields.io/badge/stack-n8n%20%2B%20FastAPI%20%2B%20Postgres-blue)
+![status](https://img.shields.io/badge/status-in%20development-yellow) [![license](https://img.shields.io/badge/license-MIT-green)](./LICENSE) ![stack](https://img.shields.io/badge/stack-n8n%20%2B%20FastAPI%20%2B%20Postgres-blue)
 
 ## Why AutoTube?
 
@@ -101,8 +101,12 @@ See `docs/TESTING.md` for the full test plan.
 
 ## Contributing
 
-This is a single-operator personal project; the pipeline design in `docs/PRD.md` and `docs/CODING_RULES.md` reflects that scope. Issues and PRs are welcome — please read `docs/ARCHITECTURE.md` and `docs/CODING_RULES.md` first so changes match the existing conventions.
+This is a single-operator personal project; the pipeline design in `docs/PRD.md` and `docs/CODING_RULES.md` reflects that scope. Issues and PRs are welcome — see `CONTRIBUTING.md` for how to get started, and `CODE_OF_CONDUCT.md` for community expectations.
+
+## Security
+
+See `docs/SECURITY.md` for the threat model and, most importantly, how to privately report a vulnerability.
 
 ## License
 
-No license has been chosen yet — all rights reserved by default until one is added.
+[MIT](./LICENSE) — see `LICENSE` for the full text.
