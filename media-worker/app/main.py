@@ -2,12 +2,14 @@
 No global mutable state between requests (docs/CODING_RULES.md §4) — every
 handler is a stateless function over its request body."""
 
+import hmac
 import logging
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from starlette.responses import JSONResponse
 
 from . import caption, clip, compliance_scan, image, render, thumbnail, tts
-from .config import WHISPER_MODEL_SIZE
+from .config import MEDIA_WORKER_API_KEY, WHISPER_MODEL_SIZE
 from .models import (
     CaptionRequest,
     CaptionResponse,
@@ -30,6 +32,19 @@ from .models import (
 logger = logging.getLogger("media_worker")
 
 app = FastAPI(title="AutoTube media-worker")
+
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    # No-op when MEDIA_WORKER_API_KEY is unset — the default Docker Compose
+    # deployment has no published port and relies on network isolation
+    # instead (docs/SECURITY.md §3). Required once the service has a public
+    # URL (e.g. deployed standalone on Render).
+    if MEDIA_WORKER_API_KEY and request.url.path != "/healthz":
+        supplied = request.headers.get("x-api-key", "")
+        if not hmac.compare_digest(supplied, MEDIA_WORKER_API_KEY):
+            return JSONResponse(status_code=401, content={"detail": "invalid or missing X-API-Key"})
+    return await call_next(request)
 
 
 @app.get("/healthz")
