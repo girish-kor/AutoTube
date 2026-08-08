@@ -41,6 +41,25 @@ services:
         value: "5678"
       - key: N8N_PROTOCOL
         value: https
+      # Render's free web service instance has 512MB RAM. V8's default heap
+      # sizing isn't container-aware and was growing the heap past what the
+      # container can actually sustain, hitting "JavaScript heap out of
+      # memory" -- the multi-second GC pauses that preceded it also explain
+      # the "Database ping failed: timed out" errors in the same logs (the
+      # event loop was stalled mid-GC, not a separate connectivity issue).
+      # 400MB leaves ~112MB headroom for non-heap/native memory.
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=400
+      # Silence n8n's startup deprecation warnings by pinning explicit
+      # values instead of relying on defaults that are changing upstream.
+      - key: N8N_UNVERIFIED_PACKAGES_ENABLED
+        value: "false"
+      - key: N8N_RUNNERS_TASK_TIMEOUT
+        value: "300"
+      - key: N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES
+        value: "2147483648"
+      - key: N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES
+        value: "5000"
       - key: N8N_HOST
         fromService:
           type: web
