@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150 # 2h pipeline budget (docs/PRD.md §7) + stack bring-up slack
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Write .env
         run: |
