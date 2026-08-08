@@ -1,0 +1,287 @@
+{
+  "name": "01-Trend-Discovery",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 0 * * *"
+            }
+          ]
+        },
+        "timezone": "UTC"
+      },
+      "id": "f59d5bdd-2157-46e5-9655-e934b5e1cbd2",
+      "name": "Cron",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM channels WHERE active = true",
+        "options": {}
+      },
+      "id": "e6da287c-4bba-4460-851c-1fa8b0768582",
+      "name": "Get Active Channels",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "batchSize": 1
+        }
+      },
+      "id": "92272197-9529-4c86-9365-9ecde66af7bd",
+      "name": "Loop Channels",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://youtube.googleapis.com/youtube/v3/videos?chart=mostPopular&regionCode={{$json.region}}&videoCategoryId={{$json.category}}&part=snippet,statistics&maxResults=25",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "d609c113-9cd2-4533-bdd5-247328a9fe68",
+      "name": "YouTube Trending",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        260
+      ],
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "name": "youtube-oauth-CHANNEL"
+        }
+      },
+      "notes": "Credential is per-channel (youtube-oauth-<channel>); deployment maps the active credential per loop iteration (docs/CONFIG.md §2).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://trends.google.com/trending/rss?geo={{$json.region}}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "7159bdcc-2557-499e-85f2-53a1707c1080",
+      "name": "Google Trends RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        260
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "mode": "combine"
+      },
+      "id": "a350780c-0a4c-4c3d-b1c3-1b2822c5a4ed",
+      "name": "Merge Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function stripHtml(text) {\n  return String(text || \"\").replace(/<[^>]*>/g, \"\").trim();\n}\n\nfunction normalizeTitle(title) {\n  return stripHtml(title).replace(/\\s+/g, \" \").trim();\n}\n\nfunction scoreYoutubeItem(item, index, total) {\n  // Rank-based decay plus a view-velocity boost, bounded to [0, 100].\n  const rankScore = ((total - index) / total) * 70;\n  const views = Number(item.viewCount || 0);\n  const velocityScore = Math.min(30, Math.log10(views + 1) * 3);\n  return Math.min(100, rankScore + velocityScore);\n}\n\nfunction scoreTrendsItem(item, index, total) {\n  return Math.min(100, ((total - index) / total) * 100);\n}\n\nfunction dedupeAndNormalize(channelId, discoveredDate, youtubeItems, trendsItems) {\n  const rows = [];\n  const seen = new Set();\n\n  youtubeItems.forEach((item, index) => {\n    const title = normalizeTitle(item.title);\n    const key = `youtube_trending::${title.toLowerCase()}`;\n    if (!title || seen.has(key)) return;\n    seen.add(key);\n    rows.push({\n      channel_id: channelId,\n      title,\n      source: \"youtube_trending\",\n      trend_score: Number(scoreYoutubeItem(item, index, youtubeItems.length).toFixed(2)),\n      discovered_date: discoveredDate,\n    });\n  });\n\n  trendsItems.forEach((item, index) => {\n    const title = normalizeTitle(item.title);\n    const key = `google_trends::${title.toLowerCase()}`;\n    if (!title || seen.has(key)) return;\n    seen.add(key);\n    rows.push({\n      channel_id: channelId,\n      title,\n      source: \"google_trends\",\n      trend_score: Number(scoreTrendsItem(item, index, trendsItems.length).toFixed(2)),\n      discovered_date: discoveredDate,\n    });\n  });\n\n  return rows;\n}\n\nreturn dedupeAndNormalize($json.channel_id, new Date().toISOString().slice(0,10), $json.youtube_items, $json.trends_items).map(row => ({ json: row }));"
+      },
+      "id": "54b5845a-82e8-4b79-9fb9-eee400898f39",
+      "name": "Dedupe & Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO topics (channel_id, title, source, trend_score, discovered_date) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (channel_id, discovered_date, source, title) DO NOTHING",
+        "options": {
+          "queryReplacement": "={{ [$json.channel_id, $json.title, $json.source, $json.trend_score, $json.discovered_date] }}"
+        }
+      },
+      "id": "31599756-36e3-4c36-89b2-aaeedb3cfe3f",
+      "name": "Upsert Topics",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO api_usage (api_name, usage_date, units_used, unit_limit) VALUES ('youtube_data_v3', CURRENT_DATE, 1, 10000) ON CONFLICT (api_name, usage_date) DO UPDATE SET units_used = api_usage.units_used + 1",
+        "options": {}
+      },
+      "id": "b1c8e72c-cb47-496e-8385-d4c336483114",
+      "name": "Log Quota",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Cron": {
+      "main": [
+        [
+          {
+            "node": "Get Active Channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Active Channels": {
+      "main": [
+        [
+          {
+            "node": "Loop Channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Channels": {
+      "main": [
+        [
+          {
+            "node": "YouTube Trending",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Google Trends RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube Trending": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Trends RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Sources": {
+      "main": [
+        [
+          {
+            "node": "Dedupe & Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe & Normalize": {
+      "main": [
+        [
+          {
+            "node": "Upsert Topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Topics": {
+      "main": [
+        [
+          {
+            "node": "Log Quota",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Quota": {
+      "main": [
+        [
+          {
+            "node": "Loop Channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

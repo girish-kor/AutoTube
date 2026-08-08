@@ -1,0 +1,282 @@
+{
+  "name": "08-Render",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "c6a4ad04-03ac-4ec0-b702-64fe82f4cdc9",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "4ba91724-55f4-4cb5-89e6-25e69c89c89a",
+      "name": "Load Video and Assets",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Guard: only proceeds if stage = 'VISUALS_GENERATED' (checked in the following If node); otherwise NoOp exit (docs/WORKFLOW.md Sub-Workflow Contract step 2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "VISUALS_GENERATED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "ad9232b7-a2f2-4ab9-b869-5a9ddaae21c5",
+      "name": "Guard: Stage = VISUALS_GENERATED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "9cf98129-20d8-48f1-aecf-d9ff2f4d9c16",
+      "name": "Exit: Wrong Stage",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM assets WHERE video_id = $1 AND type = 'image' ORDER BY scene_index",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "c7adc168-b1f4-462c-aacd-8764c15c322a",
+      "name": "Fetch Assets",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Assembles the media-worker `/render` manifest (docs/N8N_NODES.md workflow\n// 08) from the fact-checked script's per-scene start_ts (set in\n// 06-Voice-Synthesis) joined against the generated image assets.\nfunction buildRenderManifest(channelId, videoId, audioPath, scenes, assets, resolution) {\n  const assetByScene = new Map(\n    assets.filter((a) => a.type === \"image\").map((a) => [a.scene_index, a])\n  );\n\n  const images = scenes.map((scene, index) => {\n    const asset = assetByScene.get(index);\n    if (!asset) throw new Error(`missing image asset for scene_index ${index}`);\n    const nextScene = scenes[index + 1];\n    return {\n      path: asset.file_path,\n      start_ts: scene.start_ts,\n      end_ts: nextScene ? nextScene.start_ts : scene.start_ts + (scene.duration_estimate_sec || 0),\n    };\n  });\n\n  return {\n    channel_id: channelId,\n    video_id: videoId,\n    audio_path: audioPath,\n    images,\n    resolution: resolution || \"1920x1080\",\n  };\n}\n\nconst video = $('Load Video and Assets').first().json;\nconst assets = $input.all().map(i => i.json);\nreturn [{ json: buildRenderManifest(video.channel_id, video.video_id, video.audio_path, video.script_json.scenes, assets, '1920x1080') }];"
+      },
+      "id": "34cebdf8-1ab3-4b1c-918d-c5cce75d0414",
+      "name": "Build Render Manifest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.MEDIA_WORKER_BASE_URL}}/render",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json}}"
+      },
+      "id": "345db07e-b109-45af-9709-384132e4e0e8",
+      "name": "Render Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        440
+      ],
+      "notes": "docs/N8N_NODES.md preamble: Response Format=JSON, Timeout=300000ms, Retry 3x/5000ms (media jobs are slow).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{Math.abs($json.duration_sec - $('Load Video and Assets').first().json.audio_duration_sec) / $('Load Video and Assets').first().json.audio_duration_sec}}",
+              "rightValue": 0.05,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "notes": "Render duration within +/-5% of audio duration (docs/CONTENT_PIPELINE.md §3)."
+        }
+      },
+      "id": "680278a8-5057-4cc2-8f74-eda8d709e124",
+      "name": "Validate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET render_path = $1, stage = 'RENDERED' WHERE id = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.render_path, $json.video_id] }}"
+        }
+      },
+      "id": "54ec8cf4-9032-43f9-bbf3-7205cebecc7d",
+      "name": "Persist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Video and Assets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Video and Assets": {
+      "main": [
+        [
+          {
+            "node": "Guard: Stage = VISUALS_GENERATED?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Stage = VISUALS_GENERATED?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Assets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit: Wrong Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Assets": {
+      "main": [
+        [
+          {
+            "node": "Build Render Manifest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Render Manifest": {
+      "main": [
+        [
+          {
+            "node": "Render Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Call": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

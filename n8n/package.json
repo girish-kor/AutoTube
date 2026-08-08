@@ -1,0 +1,11 @@
+{
+  "name": "autotube-n8n-code-nodes",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.4"
+  }
+}

@@ -1,0 +1,227 @@
+{
+  "name": "10-Thumbnail",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "b03acdf4-f7ca-4e3b-adcb-b30b3bcee94e",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "5ca6e642-7d25-47fe-9a81-9bb7fd139a99",
+      "name": "Load Video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Guard: only proceeds if stage = 'CAPTIONED' (checked in the following If node); otherwise NoOp exit (docs/WORKFLOW.md Sub-Workflow Contract step 2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "CAPTIONED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "03f44045-ff45-43cd-a1e6-706f3c143676",
+      "name": "Guard: Stage = CAPTIONED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "1a1e7953-ad9a-487c-9d66-07aaa0349fa0",
+      "name": "Exit: Wrong Stage",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{$env.GEMINI_MODEL || 'gemini-2.0-flash'}}:generateContent",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"contents\":[{\"parts\":[{\"text\":\"=Generate a YouTube thumbnail concept for a video titled about \\\"{{$json.topic_title}}\\\".\\\\nReturn an art_prompt for an AI image generator (bold, high-contrast, single\\\\nclear focal subject, no text baked into the image, no real people's likeness,\\\\nno logos/brands) and a short overlay_text (max 5 words, punchy, not clickbait-\\\\nmisleading relative to the actual script content below).\\\\n\\\\nScript summary:\\\\n{{$json.script_json.scenes.map(s => s.narration).join(' ').slice(0, 1000)}}\"}]}],\"generationConfig\":{\"responseMimeType\":\"application/json\",\"responseSchema\":{\"type\":\"object\",\"properties\":{\"art_prompt\":{\"type\":\"string\"},\"overlay_text\":{\"type\":\"string\"}},\"required\":[\"art_prompt\",\"overlay_text\"]}}}"
+      },
+      "id": "fef77132-73a4-4959-9f56-ec840e1e598f",
+      "name": "Thumbnail Prompt (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        260
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "gemini-api"
+        }
+      },
+      "notes": "docs/AI_PIPELINE.md prompt/schema. Pre-flight-checked against api_usage/gemini before call; falls back to Ollama on quota exhaustion per docs/AI_PIPELINE.md §0 (fallback branch omitted here for diagram clarity, implement per that section).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.MEDIA_WORKER_BASE_URL}}/thumbnail",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"channel_id\":\"={{$('Load Video').first().json.channel_id}}\",\"video_id\":\"={{$('Load Video').first().json.video_id}}\",\"art_prompt\":\"={{$json.art_prompt}}\",\"overlay_text\":\"={{$json.overlay_text}}\"}"
+      },
+      "id": "40401513-614e-47c0-a1ed-b2bf9db5b314",
+      "name": "Generate Thumbnail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        260
+      ],
+      "notes": "docs/N8N_NODES.md preamble: Response Format=JSON, Timeout=300000ms, Retry 3x/5000ms (media jobs are slow).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET thumbnail_path = $1, stage = 'THUMBNAIL_READY' WHERE id = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.file_path, $('Load Video').first().json.video_id] }}"
+        }
+      },
+      "id": "9ffd0dd4-d0ac-45df-8ea5-70e4de0cbfa3",
+      "name": "Persist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Video": {
+      "main": [
+        [
+          {
+            "node": "Guard: Stage = CAPTIONED?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Stage = CAPTIONED?": {
+      "main": [
+        [
+          {
+            "node": "Thumbnail Prompt (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit: Wrong Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Thumbnail Prompt (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Generate Thumbnail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Thumbnail": {
+      "main": [
+        [
+          {
+            "node": "Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

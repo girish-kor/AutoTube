@@ -1,0 +1,309 @@
+{
+  "name": "05-Fact-Check",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "82e63f87-64ec-4f3f-87cd-477e1780e1f2",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "c77443f9-552a-4db3-bf36-f7bd75d95a42",
+      "name": "Load Video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Guard: only proceeds if stage = 'SCRIPTED' (checked in the following If node); otherwise NoOp exit (docs/WORKFLOW.md Sub-Workflow Contract step 2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "SCRIPTED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "d7d59535-f995-4608-8597-cd2a056f77f5",
+      "name": "Guard: Stage = SCRIPTED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*) AS already_checked FROM fact_checks fc JOIN videos v ON v.id = fc.video_id WHERE v.id = $1 AND v.script_hash = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id, $json.script_hash] }}"
+        }
+      },
+      "id": "649f58d3-26c3-4667-bb69-2945b40ae68b",
+      "name": "Skip If Already Checked",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1040,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "db78c2cb-cc0a-4d21-9488-e98c4c218c03",
+      "name": "Exit: Wrong Stage Or Already Checked",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Deterministic sentence-level claim extraction. Code nodes never call\n// external network APIs directly (docs/CODING_RULES.md §2) — the actual\n// Gemini verification call is the next node, \"Verify Claims (Gemini)\".\nfunction splitSentences(text) {\n  return String(text || \"\")\n    .split(/(?<=[.!?])\\s+/)\n    .map((s) => s.trim())\n    .filter(Boolean);\n}\n\nfunction extractClaims(scriptJson) {\n  const scenes = (scriptJson && scriptJson.scenes) || [];\n  const claims = [];\n  scenes.forEach((scene, sceneIndex) => {\n    splitSentences(scene.narration).forEach((sentence) => {\n      claims.push({ claim: sentence, scene_index: sceneIndex });\n    });\n  });\n  return claims;\n}\n\nreturn [{ json: { ...$json, claims: extractClaims($json.script_json) } }];"
+      },
+      "id": "798cb7c2-bbe1-4928-a2be-3229d1c59001",
+      "name": "Extract Claims",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{$env.GEMINI_MODEL || 'gemini-2.0-flash'}}:generateContent",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"contents\":[{\"parts\":[{\"text\":\"=For each claim below, decide:\\\\n- VERIFIED: claim is directly supported by one of the research facts.\\\\n- REWRITTEN: claim is close to a research fact but overstates/misstates it —\\\\n  provide a corrected rewritten_claim that stays supported by the facts.\\\\n- REMOVED: claim has no support in the research facts at all.\\\\nDefault to REMOVED when uncertain. Never mark VERIFIED without citing the\\\\nexact source_url that supports it.\\\\n\\\\nClaims:\\\\n{{JSON.stringify($json.claims)}}\\\\n\\\\nResearch facts:\\\\n{{JSON.stringify($json.research_json.facts)}}\"}]}],\"generationConfig\":{\"responseMimeType\":\"application/json\",\"responseSchema\":{\"type\":\"object\",\"properties\":{\"verdicts\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"claim\":{\"type\":\"string\"},\"status\":{\"type\":\"string\",\"enum\":[\"VERIFIED\",\"REWRITTEN\",\"REMOVED\"]},\"source_url\":{\"type\":\"string\"},\"rewritten_claim\":{\"type\":\"string\"}},\"required\":[\"claim\",\"status\"]}}},\"required\":[\"verdicts\"]}}}"
+      },
+      "id": "c9da2b20-f9df-4840-a57d-282daa1b8642",
+      "name": "Verify Claims (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        440
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "gemini-api"
+        }
+      },
+      "notes": "docs/AI_PIPELINE.md prompt/schema. Pre-flight-checked against api_usage/gemini before call; falls back to Ollama on quota exhaustion per docs/AI_PIPELINE.md §0 (fallback branch omitted here for diagram clarity, implement per that section).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Applies Gemini's per-claim verdicts deterministically (docs/AI_PIPELINE.md\n// §4): REMOVED claims are deleted, REWRITTEN claims are string-replaced. A\n// scene emptied by removals is dropped and its time redistributed to the\n// previous scene so no scene is ever left as dead air.\nfunction applyVerdicts(scriptJson, verdicts) {\n  const scenes = (scriptJson.scenes || []).map((scene, sceneIndex) => {\n    let narration = scene.narration || \"\";\n    verdicts\n      .filter((v) => v.scene_index === sceneIndex || v.scene_index === undefined)\n      .forEach((v) => {\n        if (!narration.includes(v.claim)) return;\n        if (v.status === \"REMOVED\") {\n          narration = narration.replace(v.claim, \"\").trim();\n        } else if (v.status === \"REWRITTEN\" && v.rewritten_claim) {\n          narration = narration.replace(v.claim, v.rewritten_claim);\n        }\n      });\n    narration = narration.replace(/\\s{2,}/g, \" \").trim();\n    return { ...scene, narration };\n  });\n\n  const kept = [];\n  for (const scene of scenes) {\n    if (!scene.narration) {\n      if (kept.length > 0) {\n        kept[kept.length - 1].duration_estimate_sec =\n          (kept[kept.length - 1].duration_estimate_sec || 0) + (scene.duration_estimate_sec || 0);\n      }\n      continue;\n    }\n    kept.push(scene);\n  }\n\n  return { ...scriptJson, scenes: kept };\n}\n\nconst patched = applyVerdicts($json.script_json, $json.verdicts);\nreturn [{ json: { ...$json, script_json: patched } }];"
+      },
+      "id": "eada0176-222a-437e-b791-7c27a6d2a289",
+      "name": "Apply Verdicts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fact_checks (video_id, claim, scene_index, verification_status, source_url, rewritten_claim) VALUES ($1, $2, $3, $4, $5, $6)",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id, $json.claim, $json.scene_index, $json.status, $json.source_url, $json.rewritten_claim] }}"
+        }
+      },
+      "id": "99ee99d0-ab91-4bf0-94f4-b6e52068e2f5",
+      "name": "Log Fact Checks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Bulk-inserted once per verdict item (n8n auto-iterates Postgres nodes over incoming items)."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET script_json = $1, stage = 'FACT_CHECKED' WHERE id = $2",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.script_json), $json.video_id] }}"
+        }
+      },
+      "id": "cccdfe59-75d4-46eb-93b3-2ffb044dd38a",
+      "name": "Persist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1040,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Video": {
+      "main": [
+        [
+          {
+            "node": "Guard: Stage = SCRIPTED?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Stage = SCRIPTED?": {
+      "main": [
+        [
+          {
+            "node": "Skip If Already Checked",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit: Wrong Stage Or Already Checked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip If Already Checked": {
+      "main": [
+        [
+          {
+            "node": "Extract Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Claims": {
+      "main": [
+        [
+          {
+            "node": "Verify Claims (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Claims (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Apply Verdicts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Verdicts": {
+      "main": [
+        [
+          {
+            "node": "Log Fact Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Fact Checks": {
+      "main": [
+        [
+          {
+            "node": "Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

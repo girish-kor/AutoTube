@@ -1,0 +1,117 @@
+name: E2E (full pipeline, test channel)
+
+# Weekly + on-demand only — never on every merge — to conserve free-tier
+# Gemini/YouTube quota for the actual production pipeline (docs/TESTING.md §8).
+# Requires repository secrets: GEMINI_API_KEY, YOUTUBE_CLIENT_ID,
+# YOUTUBE_CLIENT_SECRET, YOUTUBE_TEST_REFRESH_TOKEN, TELEGRAM_BOT_TOKEN,
+# TELEGRAM_CHAT_ID, AUDD_API_KEY, N8N_ENCRYPTION_KEY, POSTGRES_PASSWORD,
+# N8N_BASIC_AUTH_USER, N8N_BASIC_AUTH_PASSWORD — set once against the
+# dedicated test YouTube channel/account (docs/TESTING.md §6).
+
+on:
+  schedule:
+    - cron: "0 4 * * 1" # weekly, Monday 04:00 UTC
+  workflow_dispatch: {}
+
+env:
+  TEST_MODE: "true" # forces privacyStatus=private on all uploads (docs/TESTING.md §6)
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150 # 2h pipeline budget (docs/PRD.md §7) + stack bring-up slack
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write .env
+        run: |
+          cat > .env <<EOF
+          N8N_ENCRYPTION_KEY=${{ secrets.N8N_ENCRYPTION_KEY }}
+          N8N_BASIC_AUTH_ACTIVE=true
+          N8N_BASIC_AUTH_USER=${{ secrets.N8N_BASIC_AUTH_USER }}
+          N8N_BASIC_AUTH_PASSWORD=${{ secrets.N8N_BASIC_AUTH_PASSWORD }}
+          N8N_HOST=localhost
+          N8N_PORT=5678
+          N8N_PROTOCOL=http
+          WEBHOOK_URL=http://localhost:5678/
+          GENERIC_TIMEZONE=UTC
+          EXECUTIONS_DATA_PRUNE=true
+          EXECUTIONS_DATA_MAX_AGE=336
+          POSTGRES_HOST=postgres
+          POSTGRES_PORT=5432
+          POSTGRES_DB_N8N=n8n
+          POSTGRES_DB_AUTOTUBE=autotube
+          POSTGRES_USER=autotube
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          MEDIA_WORKER_BASE_URL=http://media-worker:8000
+          MEDIA_ROOT=/data/autotube
+          WHISPER_MODEL_SIZE=base
+          TTS_DEFAULT_VOICE=en-US-AndrewNeural
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL=gemini-2.0-flash
+          GEMINI_RPM_LIMIT=15
+          AUDD_API_KEY=${{ secrets.AUDD_API_KEY }}
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          MAX_CONCURRENT_VIDEOS=1
+          VISUAL_BATCH_SIZE=2
+          MAX_RETRIES=5
+          SHORTS_PER_VIDEO=1
+          TEST_MODE=true
+          EOF
+
+      - name: Stand up stack
+        run: |
+          docker compose up -d postgres
+          timeout 60 sh -c 'until docker compose exec -T postgres pg_isready -U autotube; do sleep 2; done'
+          docker compose up migrate
+          docker compose up -d
+
+      - name: Wait for n8n
+        run: timeout 120 sh -c 'until curl -sf http://localhost:5678/healthz; do sleep 3; done'
+
+      - name: Import workflows
+        run: |
+          for f in n8n/workflows/*.json; do
+            docker compose exec -T n8n n8n import:workflow --input="/home/node/.n8n/$(basename "$f")" || true
+          done
+        # NOTE: requires workflow files to be volume-mounted or copied into the n8n
+        # container and all 7 credentials (docs/CONFIG.md §2) pre-provisioned via
+        # `n8n import:credentials` using the secrets above — wiring left to the
+        # operator's first-run bootstrap (docs/DEPLOYMENT.md §4), not repeated here.
+
+      - name: Seed test channel + trigger pipeline
+        run: |
+          docker compose exec -T postgres psql -U autotube -d autotube -c \
+            "INSERT INTO channels (name, niche, youtube_channel_id, oauth_credential_name, daily_long_form_quota, daily_shorts_quota) \
+             VALUES ('e2e-test-channel', 'general knowledge', 'UC_E2E_TEST', 'youtube-oauth-e2e-test', 1, 1) \
+             ON CONFLICT (youtube_channel_id) DO NOTHING;"
+          docker compose exec -T n8n n8n execute --id 01-Trend-Discovery
+
+      - name: Poll for SHORTS_PUBLISHED (2h budget)
+        run: |
+          deadline=$((SECONDS + 7200))
+          while [ $SECONDS -lt $deadline ]; do
+            stage=$(docker compose exec -T postgres psql -U autotube -d autotube -tAc \
+              "SELECT stage FROM videos ORDER BY created_at DESC LIMIT 1;")
+            echo "current stage: $stage"
+            if [ "$stage" = "SHORTS_PUBLISHED" ]; then exit 0; fi
+            if [ "$stage" = "FAILED" ]; then echo "::error::pipeline reached FAILED"; exit 1; fi
+            sleep 30
+          done
+          echo "::error::did not reach SHORTS_PUBLISHED within 2h budget (docs/PRD.md §7)"
+          exit 1
+
+      - name: Assert zero pipeline_errors
+        run: |
+          count=$(docker compose exec -T postgres psql -U autotube -d autotube -tAc "SELECT count(*) FROM pipeline_errors;")
+          echo "pipeline_errors: $count"
+          [ "$count" = "0" ]
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=500
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

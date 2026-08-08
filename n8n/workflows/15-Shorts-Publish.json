@@ -1,0 +1,309 @@
+{
+  "name": "15-Shorts-Publish",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "3f52839f-4318-4ef0-976a-f4794d899375",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM shorts WHERE parent_video_id = $1 AND youtube_video_id IS NULL",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "e0e36e5a-d2f7-40a5-b150-6e706df290fb",
+      "name": "Load Shorts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{$env.GEMINI_MODEL || 'gemini-2.0-flash'}}:generateContent",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"contents\":[{\"parts\":[{\"text\":\"=Write a short-form YouTube Shorts title/description/tags for this clip, derived\\\\nfrom the parent video's metadata and this clip's own content. Title must include\\\\n#Shorts. Keep description to 1-2 sentences plus 3-5 tags inherited from the\\\\nparent's tag set, plus 1-2 trending hashtags.\\\\n\\\\nParent title: {{$json.parent_title}}\\\\nParent tags: {{JSON.stringify($json.parent_tags)}}\\\\nClip window: {{$json.start_ts}}-{{$json.end_ts}}s\"}]}],\"generationConfig\":{\"responseMimeType\":\"application/json\",\"responseSchema\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"title\",\"description\",\"tags\"]}}}"
+      },
+      "id": "250088b4-5f92-4419-9ed0-9f8483a8512c",
+      "name": "Generate Short SEO (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        780,
+        260
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "gemini-api"
+        }
+      },
+      "notes": "docs/AI_PIPELINE.md prompt/schema. Pre-flight-checked against api_usage/gemini before call; falls back to Ollama on quota exhaustion per docs/AI_PIPELINE.md §0 (fallback branch omitted here for diagram clarity, implement per that section).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "options": {
+          "batchSize": 1
+        }
+      },
+      "id": "6782a34e-18ad-459a-b7fa-76fc4f3f4610",
+      "name": "Loop & Upload",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://youtube.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=resumable",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"snippet\":{\"title\":\"={{$json.title}} #Shorts\",\"description\":\"={{$json.description}}\",\"tags\":\"={{$json.tags}}\"},\"status\":{\"privacyStatus\":\"={{$env.TEST_MODE === 'true' ? 'private' : 'public'}}\",\"selfDeclaredMadeForKids\":false,\"containsSyntheticMedia\":true}}"
+      },
+      "id": "9e7f7797-bfe6-4b4c-8e81-ef5e6fe2e44a",
+      "name": "Upload Short",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        260
+      ],
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "name": "youtube-oauth-CHANNEL"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE shorts SET youtube_video_id = $1, stage = 'SHORTS_PUBLISHED', published_at = now() WHERE id = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $('Loop & Upload').item.json.id] }}"
+        }
+      },
+      "id": "6319b30f-6eb3-4e3b-ad0e-1f7d19106f30",
+      "name": "Persist Each",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1560,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*) AS remaining FROM shorts WHERE parent_video_id = $1 AND youtube_video_id IS NULL",
+        "options": {
+          "queryReplacement": "={{ [$('Load Shorts').first().json.parent_video_id] }}"
+        }
+      },
+      "id": "b26fa8b9-ac41-4ec6-b1d7-9ca5c3f10cc6",
+      "name": "Check All Shorts Published",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.remaining}}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "e4e34271-36a3-4491-bb6f-8214cc92339d",
+      "name": "All Shorts Published?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET stage = 'SHORTS_PUBLISHED' WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$('Trigger').first().json.video_id] }}"
+        }
+      },
+      "id": "caeecb56-dc23-43cf-be87-2f211a5e318a",
+      "name": "Persist Parent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Shorts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Shorts": {
+      "main": [
+        [
+          {
+            "node": "Generate Short SEO (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Short SEO (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Loop & Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop & Upload": {
+      "main": [
+        [
+          {
+            "node": "Upload Short",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check All Shorts Published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Short": {
+      "main": [
+        [
+          {
+            "node": "Persist Each",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Each": {
+      "main": [
+        [
+          {
+            "node": "Loop & Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check All Shorts Published": {
+      "main": [
+        [
+          {
+            "node": "All Shorts Published?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Shorts Published?": {
+      "main": [
+        [
+          {
+            "node": "Persist Parent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

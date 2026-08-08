@@ -1,0 +1,477 @@
+{
+  "name": "12-Compliance-Gate",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "205cdf5d-af6c-4986-b3cb-18db8479062f",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "2de1b377-c186-4ea7-b55c-556b35210da7",
+      "name": "Load Video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Guard: only proceeds if stage = 'SEO_READY' (checked in the following If node); otherwise NoOp exit (docs/WORKFLOW.md Sub-Workflow Contract step 2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "SEO_READY",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "a905455f-0d55-45e9-a65a-db81ab7855eb",
+      "name": "Guard: Stage = SEO_READY?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "90aac95e-6226-4f49-b978-ae634533a932",
+      "name": "Exit: Wrong Stage",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM assets WHERE video_id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "bbc9151f-b60d-4f07-a464-5925881d49c6",
+      "name": "Fetch Assets For Provenance",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Mirrors media-worker/app/compliance_scan.py's rule (docs/CONTENT_PIPELINE.md\n// §4.1) — kept as a Postgres-fed Code node here because the asset list lives\n// in Postgres, not something media-worker can query itself.\nconst ALLOWED_SOURCE_TOOLS = [\"pollinations\", \"edge-tts\", \"ffmpeg\", \"pillow\"];\n\nfunction checkAssetProvenance(assets) {\n  if (!assets || assets.length === 0) {\n    return { passed: false, details: \"no assets recorded for this video\" };\n  }\n  const disallowed = assets.filter((a) => !ALLOWED_SOURCE_TOOLS.includes(a.source_tool));\n  if (disallowed.length > 0) {\n    const tools = [...new Set(disallowed.map((a) => a.source_tool))];\n    return { passed: false, details: `disallowed source_tool(s) present: ${tools.join(\", \")}` };\n  }\n  return { passed: true, details: `all ${assets.length} asset(s) sourced from allowed tools` };\n}\n\nreturn [{ json: { check_type: 'asset_provenance', ...checkAssetProvenance($input.all().map(i => i.json)) } }];"
+      },
+      "id": "6cafb740-12e0-4167-ac49-42b893842f0f",
+      "name": "Check: Asset Provenance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.audd.io/",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"url\":\"={{$('Load Video').first().json.render_path}}\"}"
+      },
+      "id": "d0324ec0-fdb1-4743-9200-d03c630d8e10",
+      "name": "Check: Audio Fingerprint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        440
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "name": "audd-api"
+        }
+      },
+      "notes": "Safety net against accidental TTS/music leakage (docs/CONTENT_PIPELINE.md §4.2).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM config WHERE key = 'restricted_topic_denylist'",
+        "options": {}
+      },
+      "id": "c7c65597-9b40-4fe5-ae5a-85ff19fcd4bc",
+      "name": "Load Denylist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Keyword/category denylist scan (docs/MONETIZATION.md §3), reading the\n// maintained list from config.restricted_topic_denylist.\nfunction checkRestrictedTopic(title, description, scriptJson, denylist) {\n  const scriptText = ((scriptJson && scriptJson.scenes) || [])\n    .map((s) => s.narration || \"\")\n    .join(\" \");\n  const haystack = `${title || \"\"} ${description || \"\"} ${scriptText}`.toLowerCase();\n\n  const hits = (denylist || []).filter((term) => haystack.includes(String(term).toLowerCase()));\n  if (hits.length > 0) {\n    return { passed: false, details: `denylist term(s) matched: ${hits.join(\", \")}` };\n  }\n  return { passed: true, details: \"no denylist terms matched\" };\n}\n\nconst video = $('Load Video').first().json;\nreturn [{ json: { check_type: 'restricted_topic', ...checkRestrictedTopic(video.title, video.description, video.script_json, $json.value) } }];"
+      },
+      "id": "c1fd2f65-1436-4043-9db1-f03bfbae40d3",
+      "name": "Check: Restricted Topic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Structurally prevents clickbait/misleading-metadata: title+description\n// must keyword-overlap the actual script content (docs/CONTENT_PIPELINE.md §4.4).\nfunction tokenize(text) {\n  return String(text || \"\").toLowerCase().match(/[a-z0-9']+/g) || [];\n}\n\nfunction checkMetadataAccuracy(title, description, scriptJson, threshold) {\n  const minLength = threshold === undefined ? 0.3 : threshold;\n  const scriptWords = new Set(\n    ((scriptJson && scriptJson.scenes) || [])\n      .flatMap((s) => tokenize(s.narration))\n      .filter((w) => w.length > 3)\n  );\n  const metaWords = [\n    ...new Set([...tokenize(title), ...tokenize(description)].filter((w) => w.length > 3)),\n  ];\n  if (metaWords.length === 0) {\n    return { passed: false, details: \"title/description produced no comparable keywords\" };\n  }\n  const overlap = metaWords.filter((w) => scriptWords.has(w)).length;\n  const ratio = overlap / metaWords.length;\n  const passed = ratio >= minLength;\n  return { passed, details: `keyword overlap ratio ${ratio.toFixed(2)} (threshold ${minLength})` };\n}\n\nconst video = $('Load Video').first().json;\nreturn [{ json: { check_type: 'metadata_accuracy', ...checkMetadataAccuracy(video.title, video.description, video.script_json) } }];"
+      },
+      "id": "813344bf-e873-421e-a129-dcd96b5753d4",
+      "name": "Check: Metadata Accuracy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO compliance_checks (video_id, check_type, passed, details) VALUES ($1, $2, $3, $4)",
+        "options": {
+          "queryReplacement": "={{ [$('Load Video').first().json.video_id, $json.check_type, $json.passed, $json.details] }}"
+        }
+      },
+      "id": "67c4f6f4-52af-4c91-9f8a-0c0a1302e884",
+      "name": "Log All Checks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Runs once per incoming check-result item (asset_provenance, audio_fingerprint, restricted_topic, metadata_accuracy)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.every_check_passed}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "notes": "Aggregation of the 4 check results into every_check_passed happens in a preceding merge/aggregate step (n8n Aggregate node) not shown as a separate named node here for diagram brevity."
+        }
+      },
+      "id": "2124836a-ec3d-4c4b-aedd-306045475b88",
+      "name": "Gate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET stage = 'COMPLIANCE_PASSED' WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$('Load Video').first().json.video_id] }}"
+        }
+      },
+      "id": "74030c25-c04a-48d8-b5ab-3c0939e3c834",
+      "name": "Persist Pass",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        620
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET stage = 'FAILED', error_message = $1 WHERE id = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.failure_reason, $('Load Video').first().json.video_id] }}"
+        }
+      },
+      "id": "834ab5f3-bcda-4de0-86a5-f818c53c0297",
+      "name": "Persist Fail",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        620
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.TELEGRAM_CHAT_ID}}",
+        "text": "=Compliance gate FAILED\nvideo_id: {{$('Load Video').first().json.video_id}}\nreason: {{$json.failure_reason}}",
+        "additionalFields": {}
+      },
+      "id": "6d00cdea-2803-4258-8683-edb85edfa026",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        780,
+        620
+      ],
+      "credentials": {
+        "telegramApi": {
+          "name": "telegram-bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Video": {
+      "main": [
+        [
+          {
+            "node": "Guard: Stage = SEO_READY?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Stage = SEO_READY?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Assets For Provenance",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check: Audio Fingerprint",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Load Denylist",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check: Metadata Accuracy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit: Wrong Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Assets For Provenance": {
+      "main": [
+        [
+          {
+            "node": "Check: Asset Provenance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check: Asset Provenance": {
+      "main": [
+        [
+          {
+            "node": "Log All Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check: Audio Fingerprint": {
+      "main": [
+        [
+          {
+            "node": "Log All Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Denylist": {
+      "main": [
+        [
+          {
+            "node": "Check: Restricted Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check: Restricted Topic": {
+      "main": [
+        [
+          {
+            "node": "Log All Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check: Metadata Accuracy": {
+      "main": [
+        [
+          {
+            "node": "Log All Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log All Checks": {
+      "main": [
+        [
+          {
+            "node": "Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate": {
+      "main": [
+        [
+          {
+            "node": "Persist Pass",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Persist Fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Fail": {
+      "main": [
+        [
+          {
+            "node": "Send Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

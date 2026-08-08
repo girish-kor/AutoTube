@@ -1,0 +1,384 @@
+{
+  "name": "03-Research",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "396a600a-5d7e-435c-af28-b585195cd524",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "6e1b894e-3a50-418f-be80-70ec80c6f654",
+      "name": "Load Video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Guard: only proceeds if stage = 'TOPIC_SELECTED' (checked in the following If node); otherwise NoOp exit (docs/WORKFLOW.md Sub-Workflow Contract step 2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "TOPIC_SELECTED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "293d888b-3402-4e69-9739-aa958ad4dfb9",
+      "name": "Guard: Stage = TOPIC_SELECTED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "300be824-135b-4680-997d-d15419db5981",
+      "name": "Exit: Wrong Stage",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={{encodeURIComponent($json.topic_title)}}&format=json",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "2b2888d4-410f-41ef-9ed9-a8eb24d93221",
+      "name": "Wikipedia Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        260
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "options": {
+          "batchSize": 1
+        }
+      },
+      "id": "27efef71-e0ab-4ae1-9b43-7188d8d5d8a4",
+      "name": "Loop Top-5 Pages",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://en.wikipedia.org/api/rest_v1/page/summary/{{encodeURIComponent($json.title)}}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "e5cd4c9f-870a-4f7a-9ea7-851839d40a1b",
+      "name": "Wikipedia Summaries",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        440
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://html.duckduckgo.com/html/?q={{encodeURIComponent($json.topic_title)}}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "83fd6089-5eaa-4750-9f33-6787b87b97df",
+      "name": "DuckDuckGo Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        440
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "extractionValues": {
+          "values": [
+            {
+              "key": "snippets",
+              "cssSelector": ".result__snippet",
+              "returnArray": true
+            }
+          ]
+        }
+      },
+      "id": "011334b3-ea3e-482f-9adc-5657c986b230",
+      "name": "DuckDuckGo Extract",
+      "type": "n8n-nodes-base.htmlExtract",
+      "typeVersion": 1.2,
+      "position": [
+        780,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{$env.GEMINI_MODEL || 'gemini-2.0-flash'}}:generateContent",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"contents\":[{\"parts\":[{\"text\":\"=Compile factual notes for a video about \\\"{{$json.topic_title}}\\\" using ONLY the source\\\\nmaterial below. Do not add facts not present in the sources. For each fact,\\\\ncopy the exact source_url it came from. Produce at least 8 distinct facts if\\\\nthe sources support it; if they don't, return fewer — never invent facts to\\\\nreach a count. Flag any source material that is opinion, not fact.\\\\n\\\\nSources:\\\\n{{JSON.stringify($json.sources)}}\"}]}],\"generationConfig\":{\"responseMimeType\":\"application/json\",\"responseSchema\":{\"type\":\"object\",\"properties\":{\"facts\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"claim\":{\"type\":\"string\"},\"source_url\":{\"type\":\"string\"}},\"required\":[\"claim\",\"source_url\"]}}},\"required\":[\"facts\"]}}}"
+      },
+      "id": "93579797-2a73-41b7-b357-dd862875e296",
+      "name": "Compile Research (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        440
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "gemini-api"
+        }
+      },
+      "notes": "docs/AI_PIPELINE.md prompt/schema. Pre-flight-checked against api_usage/gemini before call; falls back to Ollama on quota exhaustion per docs/AI_PIPELINE.md §0 (fallback branch omitted here for diagram clarity, implement per that section).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.facts.length}}",
+              "rightValue": 8,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      },
+      "id": "c8284d08-7c31-4d7c-b978-54064333ecb0",
+      "name": "Validate Non-Empty",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET research_json = $1, stage = 'RESEARCHED' WHERE id = $2",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json), $json.video_id] }}"
+        }
+      },
+      "id": "2fa9da9b-a86b-43ee-a358-8d5adcaf88a9",
+      "name": "Persist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1560,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Video": {
+      "main": [
+        [
+          {
+            "node": "Guard: Stage = TOPIC_SELECTED?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Stage = TOPIC_SELECTED?": {
+      "main": [
+        [
+          {
+            "node": "Wikipedia Search",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit: Wrong Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wikipedia Search": {
+      "main": [
+        [
+          {
+            "node": "Loop Top-5 Pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Top-5 Pages": {
+      "main": [
+        [
+          {
+            "node": "Wikipedia Summaries",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DuckDuckGo Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wikipedia Summaries": {
+      "main": [
+        [
+          {
+            "node": "Loop Top-5 Pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DuckDuckGo Search": {
+      "main": [
+        [
+          {
+            "node": "DuckDuckGo Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DuckDuckGo Extract": {
+      "main": [
+        [
+          {
+            "node": "Compile Research (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile Research (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Validate Non-Empty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Non-Empty": {
+      "main": [
+        [
+          {
+            "node": "Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,1075 @@
+{
+  "name": "00-Master-Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "04ae971a-ca4e-45c7-908c-14ed5dcb1d5e",
+      "name": "Cron",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM channels WHERE active = true",
+        "options": {}
+      },
+      "id": "d772c89b-7d5d-4c11-8aa0-c11e028f2856",
+      "name": "Fetch Active Channels",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "batchSize": 1
+        }
+      },
+      "id": "85de3211-2165-4921-9176-e1b69e09bbc0",
+      "name": "Loop Channels (Topic Selection)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "02-Topic-Selection"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "113cdf70-4a49-47b7-9f31-2d6e2f36acef",
+      "name": "Execute: Topic-Selection",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE stage NOT IN ('PUBLISHED','SHORTS_PUBLISHED','CROSSPOSTED','FAILED') AND retry_count < $1 ORDER BY updated_at ASC LIMIT $2",
+        "options": {
+          "queryReplacement": "={{ [Number($env.MAX_RETRIES || 5), Number($env.MAX_CONCURRENT_VIDEOS || 3)] }}"
+        }
+      },
+      "id": "eaa70619-af7f-461c-8dda-ad15dfe1ec00",
+      "name": "Fetch Due Videos",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "MAX_RETRIES/MAX_CONCURRENT_VIDEOS env fallback per docs/CONFIG.md §3 precedence rule 3."
+    },
+    {
+      "parameters": {
+        "options": {
+          "batchSize": "={{Number($env.MAX_CONCURRENT_VIDEOS || 3)}}"
+        }
+      },
+      "id": "80bcdd97-d757-452f-8b51-80cb1e2b20e2",
+      "name": "Split Batch",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "TOPIC_SELECTED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "RESEARCHED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "SCRIPTED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "FACT_CHECKED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "VOICED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "VISUALS_GENERATED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "RENDERED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "CAPTIONED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "THUMBNAIL_READY",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "SEO_READY",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "COMPLIANCE_PASSED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "PUBLISHED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "SHORTS_EXTRACTED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.stage}}",
+                    "rightValue": "SHORTS_PUBLISHED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": []
+              }
+            }
+          ]
+        }
+      },
+      "id": "69b7032e-34d1-4e20-9365-58f339fa6ee1",
+      "name": "Route by Stage",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        260,
+        440
+      ],
+      "notes": "16 outputs: 14 explicit stage routes + fallback = matches N8N_NODES.md's stated count when paired with the separate channel-level Topic-Selection branch above."
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "03-Research"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "5aba2aff-051d-4dd5-87db-89155422fb86",
+      "name": "Execute: 03-Research",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        520,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "04-Script-Writer"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "72e08da8-1da4-4a3a-99ef-a48cc67c6d4e",
+      "name": "Execute: 04-Script-Writer",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        780,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "05-Fact-Check"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "8fe006db-6bd8-477b-93c7-9f9494b336ef",
+      "name": "Execute: 05-Fact-Check",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1040,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "06-Voice-Synthesis"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "de072ce3-c446-478a-b203-9b919156a453",
+      "name": "Execute: 06-Voice-Synthesis",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1300,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "07-Visual-Generation"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "9d307fba-ba2c-43e2-b3d7-6de05ccf8a6c",
+      "name": "Execute: 07-Visual-Generation",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1560,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "08-Render"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "18ac5974-8ffd-4627-b5eb-6fe600368410",
+      "name": "Execute: 08-Render",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "09-Captioning"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "e85b8cfa-01ba-4410-ba0e-2be625a37fe4",
+      "name": "Execute: 09-Captioning",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        520,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "10-Thumbnail"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "7928474c-3ea8-4b98-8ff4-b7b9d5740e32",
+      "name": "Execute: 10-Thumbnail",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        780,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "11-SEO-Metadata"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "5213927e-4ae5-4cd6-864f-d0cac4d5f32e",
+      "name": "Execute: 11-SEO-Metadata",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1040,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "12-Compliance-Gate"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "e697f8b5-0765-468e-a176-7fdf6f517ddc",
+      "name": "Execute: 12-Compliance-Gate",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1300,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "13-Publish-LongForm"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "cd18590d-1b9d-4714-8d5e-973f4d551f30",
+      "name": "Execute: 13-Publish-LongForm",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1560,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "14-Shorts-Extraction"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "3fb6a3e6-36ee-45a4-9c0f-d61b79639ddd",
+      "name": "Execute: 14-Shorts-Extraction",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "15-Shorts-Publish"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "965b27d1-29e5-4f17-9575-db8aafb77177",
+      "name": "Execute: 15-Shorts-Publish",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        520,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "value": "",
+          "cachedResultName": "16-Crosspost"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "06380ac1-d714-4cd5-b19b-19995cb27c6d",
+      "name": "Execute: 16-Crosspost",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        780,
+        800
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "23756cc9-d024-4e65-9f3c-dab5cf593b03",
+      "name": "Unmatched Stage (No Successor)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        800
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "9ff91bb4-5bf8-4c2e-9f00-1e5a63283185",
+      "name": "Log Result",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        800
+      ]
+    }
+  ],
+  "connections": {
+    "Cron": {
+      "main": [
+        [
+          {
+            "node": "Fetch Active Channels",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Due Videos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Active Channels": {
+      "main": [
+        [
+          {
+            "node": "Loop Channels (Topic Selection)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Channels (Topic Selection)": {
+      "main": [
+        [
+          {
+            "node": "Execute: Topic-Selection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: Topic-Selection": {
+      "main": [
+        [
+          {
+            "node": "Loop Channels (Topic Selection)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Due Videos": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Batch": {
+      "main": [
+        [
+          {
+            "node": "Route by Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Stage": {
+      "main": [
+        [
+          {
+            "node": "Execute: 03-Research",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 04-Script-Writer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 05-Fact-Check",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 06-Voice-Synthesis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 07-Visual-Generation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 08-Render",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 09-Captioning",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 10-Thumbnail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 11-SEO-Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 12-Compliance-Gate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 13-Publish-LongForm",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 14-Shorts-Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 15-Shorts-Publish",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute: 16-Crosspost",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unmatched Stage (No Successor)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 03-Research": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 04-Script-Writer": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 05-Fact-Check": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 06-Voice-Synthesis": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 07-Visual-Generation": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 08-Render": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 09-Captioning": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 10-Thumbnail": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 11-SEO-Metadata": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 12-Compliance-Gate": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 13-Publish-LongForm": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 14-Shorts-Extraction": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 15-Shorts-Publish": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute: 16-Crosspost": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unmatched Stage (No Successor)": {
+      "main": [
+        [
+          {
+            "node": "Split Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

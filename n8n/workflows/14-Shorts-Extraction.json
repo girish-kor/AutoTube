@@ -1,0 +1,286 @@
+{
+  "name": "14-Shorts-Extraction",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "b7090ee6-dca8-43a1-9e0a-3314ed54f9ed",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "f5291abb-8de0-4b41-8299-48a4dd55cd15",
+      "name": "Load Video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Guard: only proceeds if stage = 'PUBLISHED' (checked in the following If node); otherwise NoOp exit (docs/WORKFLOW.md Sub-Workflow Contract step 2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "PUBLISHED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "013ce4f7-fa27-4cf5-90c9-470f66b992fa",
+      "name": "Guard: Stage = PUBLISHED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "b2afeb88-2d67-4616-9d3d-6619f5f9859c",
+      "name": "Exit: Wrong Stage",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.MEDIA_WORKER_BASE_URL}}/clip",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"video_id\":\"={{$json.video_id}}\",\"captions_path\":\"={{$json.captions_path}}\",\"script_json\":\"={{$json.script_json}}\",\"top_n\":\"={{Number($env.SHORTS_PER_VIDEO || 3)}}\"}"
+      },
+      "id": "4e094e32-75a8-4b35-8c35-fb6fca07db85",
+      "name": "Score Highlights",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        260
+      ],
+      "notes": "docs/N8N_NODES.md preamble: Response Format=JSON, Timeout=300000ms, Retry 3x/5000ms.",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "options": {
+          "batchSize": 1
+        }
+      },
+      "id": "9b31660d-32c0-4fcb-a9de-180ab5eda86a",
+      "name": "Loop Candidates",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.MEDIA_WORKER_BASE_URL}}/render",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"channel_id\":\"={{$('Load Video').first().json.channel_id}}\",\"video_id\":\"={{$('Load Video').first().json.video_id}}\",\"source\":\"={{$('Load Video').first().json.render_path}}\",\"start_ts\":\"={{$json.start_ts}}\",\"end_ts\":\"={{$json.end_ts}}\",\"aspect\":\"9:16\",\"burn_captions\":true,\"captions_path\":\"={{$('Load Video').first().json.captions_path}}\",\"clip_index\":\"={{$runIndex}}\"}"
+      },
+      "id": "2a8c1d71-583a-422f-b92b-1f4e55e04b61",
+      "name": "Render Short",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        440
+      ],
+      "notes": "docs/N8N_NODES.md preamble: Response Format=JSON, Timeout=300000ms, Retry 3x/5000ms.",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO shorts (parent_video_id, clip_index, start_ts, end_ts, score, render_path) VALUES ($1, $2, $3, $4, $5, $6)",
+        "options": {
+          "queryReplacement": "={{ [$('Load Video').first().json.video_id, $runIndex, $('Loop Candidates').item.json.start_ts, $('Loop Candidates').item.json.end_ts, $('Loop Candidates').item.json.score, $json.render_path] }}"
+        }
+      },
+      "id": "cd01ad26-5469-4ea1-8579-53b4d65b3c48",
+      "name": "Record Short",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET stage = 'SHORTS_EXTRACTED' WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$('Load Video').first().json.video_id] }}"
+        }
+      },
+      "id": "2b8c546a-e42a-44a5-86a5-6512cad79e2f",
+      "name": "Persist Parent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Video": {
+      "main": [
+        [
+          {
+            "node": "Guard: Stage = PUBLISHED?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Stage = PUBLISHED?": {
+      "main": [
+        [
+          {
+            "node": "Score Highlights",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit: Wrong Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Highlights": {
+      "main": [
+        [
+          {
+            "node": "Loop Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Candidates": {
+      "main": [
+        [
+          {
+            "node": "Render Short",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Persist Parent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Short": {
+      "main": [
+        [
+          {
+            "node": "Record Short",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Short": {
+      "main": [
+        [
+          {
+            "node": "Loop Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  media-worker:
+    name: media-worker (lint + unit/integration tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install dependencies
+        working-directory: media-worker
+        run: pip install -r requirements-dev.txt
+      - name: Lint (ruff)
+        working-directory: media-worker
+        run: ruff check app tests
+      - name: Test (pytest, coverage gate 80%)
+        working-directory: media-worker
+        run: pytest tests/unit tests/integration --cov=app --cov-report=term-missing --cov-fail-under=80
+
+  n8n-code-nodes:
+    name: n8n code-nodes (vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        working-directory: n8n
+        run: npm ci
+      - name: Test
+        working-directory: n8n
+        run: npx vitest run
+
+  validate-workflows:
+    name: Validate n8n workflow JSON
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Structural validation
+        working-directory: n8n/workflows
+        run: |
+          fail=0
+          for f in *.json; do
+            node -e "
+              const wf = require('./$f');
+              if (!wf.name || !Array.isArray(wf.nodes) || typeof wf.connections !== 'object') process.exit(1);
+              const names = new Set();
+              for (const n of wf.nodes) { if (names.has(n.name)) process.exit(1); names.add(n.name); }
+              for (const [from, conn] of Object.entries(wf.connections)) {
+                if (!names.has(from)) process.exit(1);
+                for (const branch of conn.main) for (const edge of branch) if (!names.has(edge.node)) process.exit(1);
+              }
+            " || { echo "::error file=n8n/workflows/$f::structural validation failed"; fail=1; }
+          done
+          exit $fail

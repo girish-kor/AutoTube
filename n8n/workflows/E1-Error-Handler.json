@@ -1,0 +1,208 @@
+{
+  "name": "E1-Error-Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "081e67a6-da33-435e-95a1-e706591f3928",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO pipeline_errors (video_id, workflow_name, stage, error_message, stack) VALUES ($1, $2, $3, $4, $5)",
+        "options": {
+          "queryReplacement": "={{ [$json.execution.customData?.video_id ?? null, $json.workflow.name, $json.execution.customData?.stage ?? null, $json.execution.error.message, $json.execution.error.stack] }}"
+        }
+      },
+      "id": "1f672b9b-7883-4539-8a0d-17ada3ee9f9f",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET retry_count = retry_count + 1, error_message = $1 WHERE id = $2 RETURNING retry_count",
+        "options": {
+          "queryReplacement": "={{ [$json.execution.error.message, $json.execution.customData?.video_id ?? null] }}"
+        }
+      },
+      "id": "865b3a5a-9684-4702-86a7-9e3ecc9df74a",
+      "name": "Increment Retry",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.retry_count}}",
+              "rightValue": "={{Number($env.MAX_RETRIES || 5)}}",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ]
+        }
+      },
+      "id": "3c905703-48bf-477d-b758-b3b36367c5e7",
+      "name": "Decide",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "9fb55046-3bff-4566-a62d-ec851fc1b8e7",
+      "name": "Requeue",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        260
+      ],
+      "notes": "No-op: video stays at its last successful stage; Master Orchestrator retries it next 15-min cycle."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET stage = 'FAILED' WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.execution.customData?.video_id ?? null] }}"
+        }
+      },
+      "id": "c06a1082-1872-4fe6-baa8-62161bc51648",
+      "name": "Mark Failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1560,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.TELEGRAM_CHAT_ID}}",
+        "text": "=AutoTube pipeline failure\nvideo_id: {{$json.execution.customData?.video_id}}\nworkflow: {{$json.workflow.name}}\nstage: {{$json.execution.customData?.stage}}\nerror: {{$json.execution.error.message}}\ntime: {{$now}}",
+        "additionalFields": {}
+      },
+      "id": "cd993bcd-1fc3-4e53-b31d-001a3c9c9e28",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        440
+      ],
+      "credentials": {
+        "telegramApi": {
+          "name": "telegram-bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Error": {
+      "main": [
+        [
+          {
+            "node": "Increment Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Increment Retry": {
+      "main": [
+        [
+          {
+            "node": "Decide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide": {
+      "main": [
+        [
+          {
+            "node": "Requeue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Failed": {
+      "main": [
+        [
+          {
+            "node": "Send Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

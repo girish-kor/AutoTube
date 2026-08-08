@@ -1,0 +1,11 @@
+{
+  "name": "autotube-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "mock-server": "node mocks/server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.1"
+  }
+}

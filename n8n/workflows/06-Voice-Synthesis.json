@@ -1,0 +1,256 @@
+{
+  "name": "06-Voice-Synthesis",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "365cd82e-6bc2-4660-804c-ad0f5fc7738c",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "7ae1ce82-b200-4aa5-8231-70b7bea8ad85",
+      "name": "Load Video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Guard: only proceeds if stage = 'FACT_CHECKED' (checked in the following If node); otherwise NoOp exit (docs/WORKFLOW.md Sub-Workflow Contract step 2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "FACT_CHECKED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "74331d38-1b1a-4009-9dba-92644778b83c",
+      "name": "Guard: Stage = FACT_CHECKED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "f70b3481-b52c-43b0-8893-2ef956561c87",
+      "name": "Exit: Wrong Stage",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Builds the SSML the media-worker `/tts` endpoint expects: one\n// <mark name=\"scene_N\"/> boundary per scene (docs/N8N_NODES.md workflow 06;\n// media-worker/app/tts.py's split_ssml_scenes parses this exact convention).\nfunction escapeSsmlText(text) {\n  return String(text || \"\")\n    .replace(/&/g, \"&amp;\")\n    .replace(/</g, \"&lt;\")\n    .replace(/>/g, \"&gt;\");\n}\n\nfunction joinNarration(scriptJson) {\n  const scenes = (scriptJson && scriptJson.scenes) || [];\n  const body = scenes\n    .map((scene, index) => `<mark name=\"scene_${index}\"/>${escapeSsmlText(scene.narration)}`)\n    .join(\" \");\n  return `<speak>${body}</speak>`;\n}\n\nreturn [{ json: { ...$json, ssml: joinNarration($json.script_json) } }];"
+      },
+      "id": "a03e0c0f-cd1e-4352-a975-6019cebcc611",
+      "name": "Join Narration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.MEDIA_WORKER_BASE_URL}}/tts",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"video_id\":\"={{$json.video_id}}\",\"channel_id\":\"={{$json.channel_id}}\",\"ssml\":\"={{$json.ssml}}\",\"voice\":\"={{$json.tts_voice || $env.TTS_DEFAULT_VOICE}}\"}"
+      },
+      "id": "b5a16b30-a0cf-4026-99bd-1d5bd09728de",
+      "name": "TTS Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        260
+      ],
+      "notes": "docs/N8N_NODES.md preamble: Response Format=JSON, Timeout=300000ms, Retry 3x/5000ms (media jobs are slow).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.duration_sec}}",
+              "rightValue": 480,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "leftValue": "={{$json.duration_sec}}",
+              "rightValue": 900,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ]
+        }
+      },
+      "id": "47a4b278-e56b-4e8c-adbe-68b348ae8201",
+      "name": "Validate Duration",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET audio_path = $1, stage = 'VOICED', script_json = jsonb_set(script_json, '{scenes}', $2::jsonb) WHERE id = $3",
+        "options": {
+          "queryReplacement": "={{ [$json.audio_path, JSON.stringify($json.script_json.scenes.map((s, i) => ({ ...s, start_ts: ($json.scene_timestamps.find(t => t.scene_index === i) || {}).start_ts }))), $json.video_id] }}"
+        }
+      },
+      "id": "4b938033-69de-42ee-826f-4aa54f1147e3",
+      "name": "Persist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Video": {
+      "main": [
+        [
+          {
+            "node": "Guard: Stage = FACT_CHECKED?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Stage = FACT_CHECKED?": {
+      "main": [
+        [
+          {
+            "node": "Join Narration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit: Wrong Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Join Narration": {
+      "main": [
+        [
+          {
+            "node": "TTS Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TTS Call": {
+      "main": [
+        [
+          {
+            "node": "Validate Duration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Duration": {
+      "main": [
+        [
+          {
+            "node": "Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

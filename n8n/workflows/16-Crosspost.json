@@ -1,0 +1,523 @@
+{
+  "name": "16-Crosspost",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "d17b9b0f-286b-4c07-8bc7-46a2b289d04f",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM shorts WHERE parent_video_id = $1 AND stage = 'SHORTS_PUBLISHED'",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "df61a9e0-cd94-4978-8af0-103dfb927c00",
+      "name": "Load Shorts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const shorts = $input.all().map(i => i.json);\nconst platforms = ['INSTAGRAM', 'TIKTOK'];\nreturn shorts.flatMap(s => platforms.map(p => ({ json: { ...s, platform: p } })));"
+      },
+      "id": "e62f51fe-8f4f-47aa-ab3c-5681f656dab2",
+      "name": "Expand Shorts x Platforms",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "batchSize": 1
+        }
+      },
+      "id": "fb0c00ae-03af-434c-a737-2099123d4727",
+      "name": "Loop Platforms",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*) AS already_posted FROM crossposts WHERE short_id = $1 AND platform = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $json.platform] }}"
+        }
+      },
+      "id": "6a67291c-6e94-4743-b840-7e07df8f72e3",
+      "name": "Skip If Posted",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.already_posted}}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "ef0e042b-0a30-4ec4-99e0-46deef0008a2",
+      "name": "Not Yet Posted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$('Loop Platforms').item.json.platform}}",
+              "rightValue": "INSTAGRAM",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "bd79a10f-c556-4171-a871-063f199371f7",
+      "name": "Platform = Instagram?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v19.0/{{$env.META_IG_USER_ID}}/media",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"media_type\":\"REELS\",\"video_url\":\"={{$('Loop Platforms').item.json.render_path}}\",\"caption\":\"={{$('Loop Platforms').item.json.title}}\"}"
+      },
+      "id": "4fe29158-fdf5-49ff-a544-f9b7c08bb530",
+      "name": "Instagram: Create Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        440
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "meta-graph-api"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v19.0/{{$env.META_IG_USER_ID}}/media_publish",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"creation_id\":\"={{$json.creation_id}}\"}"
+      },
+      "id": "69f0dc28-428a-4b9c-84f0-94e7eb1f08e4",
+      "name": "Instagram: Publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        780,
+        440
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "meta-graph-api"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://open.tiktokapis.com/v2/post/publish/video/init/",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"post_info\":{\"title\":\"={{$('Loop Platforms').item.json.title}}\"}}"
+      },
+      "id": "f30fdd1b-b20f-4e28-a9aa-8a7ab72d415d",
+      "name": "TikTok: Init Upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        440
+      ],
+      "credentials": {
+        "oAuth2Api": {
+          "name": "tiktok-content-api"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{$json.upload_url}}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "0d11b51b-6638-41e7-ab9b-de1eff4691e7",
+      "name": "TikTok: Upload Bytes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        440
+      ],
+      "notes": "Binary render file PUT to the upload_url returned by Init Upload.",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO crossposts (short_id, platform, external_post_id, status, posted_at) VALUES ($1, $2, $3, 'POSTED', now())",
+        "options": {
+          "queryReplacement": "={{ [$('Loop Platforms').item.json.id, $('Loop Platforms').item.json.platform, $json.id || $json.publish_id] }}"
+        }
+      },
+      "id": "084d5777-4645-4fd3-b6f3-5cff0e856eb3",
+      "name": "Record Crosspost",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1560,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*) AS remaining FROM shorts s WHERE s.parent_video_id = $1 AND s.stage = 'SHORTS_PUBLISHED' AND (SELECT count(*) FROM crossposts c WHERE c.short_id = s.id) < 2",
+        "options": {
+          "queryReplacement": "={{ [$('Trigger').first().json.video_id] }}"
+        }
+      },
+      "id": "e9bfdba5-0dff-4c64-8e4d-292ffea71492",
+      "name": "Check All Crossposts Recorded",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        620
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.remaining}}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "4756c5c8-1b05-42dd-b953-7438b897c550",
+      "name": "All Combinations Recorded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET stage = 'CROSSPOSTED' WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$('Trigger').first().json.video_id] }}"
+        }
+      },
+      "id": "9414f052-3d03-4b64-b538-1bcfe0e6bfd7",
+      "name": "Persist Parent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        620
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Shorts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Shorts": {
+      "main": [
+        [
+          {
+            "node": "Expand Shorts x Platforms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Shorts x Platforms": {
+      "main": [
+        [
+          {
+            "node": "Loop Platforms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Platforms": {
+      "main": [
+        [
+          {
+            "node": "Skip If Posted",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check All Crossposts Recorded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip If Posted": {
+      "main": [
+        [
+          {
+            "node": "Not Yet Posted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Not Yet Posted?": {
+      "main": [
+        [
+          {
+            "node": "Platform = Instagram?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Platforms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Platform = Instagram?": {
+      "main": [
+        [
+          {
+            "node": "Instagram: Create Container",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TikTok: Init Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Instagram: Create Container": {
+      "main": [
+        [
+          {
+            "node": "Instagram: Publish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Instagram: Publish": {
+      "main": [
+        [
+          {
+            "node": "Record Crosspost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TikTok: Init Upload": {
+      "main": [
+        [
+          {
+            "node": "TikTok: Upload Bytes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TikTok: Upload Bytes": {
+      "main": [
+        [
+          {
+            "node": "Record Crosspost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Crosspost": {
+      "main": [
+        [
+          {
+            "node": "Loop Platforms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check All Crossposts Recorded": {
+      "main": [
+        [
+          {
+            "node": "All Combinations Recorded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Combinations Recorded?": {
+      "main": [
+        [
+          {
+            "node": "Persist Parent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

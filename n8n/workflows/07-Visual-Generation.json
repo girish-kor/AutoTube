@@ -1,0 +1,396 @@
+{
+  "name": "07-Visual-Generation",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "f23e18ce-46a8-4938-9223-8c85b2de390f",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "54eb769d-d27c-4d55-994e-1c4929756c7e",
+      "name": "Load Video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Guard: only proceeds if stage = 'VOICED' (checked in the following If node); otherwise NoOp exit (docs/WORKFLOW.md Sub-Workflow Contract step 2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "VOICED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "e2939d96-50df-4799-8f3e-88ff8ae64c06",
+      "name": "Guard: Stage = VOICED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "876de1dc-07e8-4534-8191-0f2cd8711fea",
+      "name": "Exit: Wrong Stage",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "batchSize": "={{Number($env.VISUAL_BATCH_SIZE || 3)}}"
+        }
+      },
+      "id": "8a51b413-eb32-4007-abe0-a719af5ad1a0",
+      "name": "Loop Scenes",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*) AS existing FROM assets WHERE video_id = $1 AND type = 'image' AND scene_index = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id, $json.scene_index] }}"
+        }
+      },
+      "id": "079f9d93-f413-462a-b598-2f6089efdd3a",
+      "name": "Skip If Exists",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1560,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.existing}}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "07f6b23f-f99a-4dd8-92cb-95c7ab0a9c1b",
+      "name": "Skip If Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.MEDIA_WORKER_BASE_URL}}/image",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"channel_id\":\"={{$json.channel_id}}\",\"video_id\":\"={{$json.video_id}}\",\"scene_index\":\"={{$json.scene_index}}\",\"prompt\":\"={{$json.visual_prompt}}\",\"width\":1920,\"height\":1080,\"seed\":\"={{$json.scene_index}}\"}"
+      },
+      "id": "21d7b14d-9f6c-4525-b713-aaa918fe0c19",
+      "name": "Generate Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        440
+      ],
+      "notes": "docs/N8N_NODES.md preamble: Response Format=JSON, Timeout=300000ms, Retry 3x/5000ms (media jobs are slow).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO assets (video_id, type, scene_index, prompt, file_path, source_tool) VALUES ($1, 'image', $2, $3, $4, 'pollinations')",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id, $json.scene_index, $json.visual_prompt, $json.file_path] }}"
+        }
+      },
+      "id": "17c2c2cb-b91c-4f21-bb8b-c49e9bdb2e7b",
+      "name": "Record Asset",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*) AS asset_count FROM assets WHERE video_id = $1 AND type = 'image'",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "a3fd4e08-9997-4448-a6c8-1d7b98509ba2",
+      "name": "Count Image Assets",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1040,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.asset_count}}",
+              "rightValue": "={{$json.scenes.length}}",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      },
+      "id": "11631751-6855-4456-94ca-54873071ad92",
+      "name": "All Scenes Done?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET stage = 'VISUALS_GENERATED' WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "dce6eb3f-5c8d-4580-844b-953d4f3e69fe",
+      "name": "Persist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1560,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Video": {
+      "main": [
+        [
+          {
+            "node": "Guard: Stage = VOICED?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Stage = VOICED?": {
+      "main": [
+        [
+          {
+            "node": "Loop Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit: Wrong Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Scenes": {
+      "main": [
+        [
+          {
+            "node": "Skip If Exists",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Count Image Assets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip If Exists": {
+      "main": [
+        [
+          {
+            "node": "Skip If Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip If Exists?": {
+      "main": [
+        [
+          {
+            "node": "Generate Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Image": {
+      "main": [
+        [
+          {
+            "node": "Record Asset",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Asset": {
+      "main": [
+        [
+          {
+            "node": "Loop Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Count Image Assets": {
+      "main": [
+        [
+          {
+            "node": "All Scenes Done?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Scenes Done?": {
+      "main": [
+        [
+          {
+            "node": "Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

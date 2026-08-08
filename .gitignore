@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+*.log
+media-worker/.venv/
+media-worker/.coverage
+media-worker/tests/_media_root/
+
+media_data/
+postgres_data/
+n8n_data/
+caddy_data/

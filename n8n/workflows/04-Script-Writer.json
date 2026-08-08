@@ -1,0 +1,242 @@
+{
+  "name": "04-Script-Writer",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "d698451a-ccb4-4de0-ab07-8cce3b636bee",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "eb918268-c5cf-48ed-bca3-0f9df866165e",
+      "name": "Load Video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Guard: only proceeds if stage = 'RESEARCHED' (checked in the following If node); otherwise NoOp exit (docs/WORKFLOW.md Sub-Workflow Contract step 2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "RESEARCHED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "f43717af-4d3a-4045-83aa-a2219f0d7dda",
+      "name": "Guard: Stage = RESEARCHED?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "3fb7a65a-4203-4b4c-ace5-bb0b928e4bfc",
+      "name": "Exit: Wrong Stage",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{$env.GEMINI_MODEL || 'gemini-2.0-flash'}}:generateContent",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"contents\":[{\"parts\":[{\"text\":\"=Write a spoken-word YouTube script on \\\"{{$json.topic_title}}\\\", 1200-2200 words,\\\\n8-15 minutes narrated. Base every factual claim strictly on the provided\\\\nresearch facts — do not introduce unsourced claims. Break the script into\\\\n8-20 scenes. For each scene provide: narration text (natural spoken sentences,\\\\nno stage directions), a visual_prompt (a text-to-image prompt describing what\\\\nshould be shown on screen, safe-for-work, no real people's likeness, no\\\\ncopyrighted characters/logos/brands), and duration_estimate_sec.\\\\nOpen with a hook in the first scene. End with a summary, not a sales pitch.\\\\n\\\\nResearch facts:\\\\n{{JSON.stringify($json.research_json.facts)}}\"}]}],\"generationConfig\":{\"responseMimeType\":\"application/json\",\"responseSchema\":{\"type\":\"object\",\"properties\":{\"scenes\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"narration\":{\"type\":\"string\"},\"visual_prompt\":{\"type\":\"string\"},\"duration_estimate_sec\":{\"type\":\"number\"}},\"required\":[\"narration\",\"visual_prompt\",\"duration_estimate_sec\"]}}},\"required\":[\"scenes\"]}}}"
+      },
+      "id": "1c497b5d-d7b2-4c11-9627-93117fe8dab0",
+      "name": "Generate Script (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        260
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "gemini-api"
+        }
+      },
+      "notes": "docs/AI_PIPELINE.md prompt/schema. Pre-flight-checked against api_usage/gemini before call; falls back to Ollama on quota exhaustion per docs/AI_PIPELINE.md §0 (fallback branch omitted here for diagram clarity, implement per that section).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function countWords(text) {\n  return String(text || \"\").trim().split(/\\s+/).filter(Boolean).length;\n}\n\nfunction validateScript(scriptJson) {\n  const scenes = (scriptJson && scriptJson.scenes) || [];\n  const errors = [];\n\n  if (scenes.length < 8 || scenes.length > 20) {\n    errors.push(`scene count ${scenes.length} outside 8-20 range`);\n  }\n\n  scenes.forEach((scene, index) => {\n    if (!scene.narration || !scene.narration.trim()) {\n      errors.push(`scene ${index} has empty narration`);\n    }\n    if (!scene.visual_prompt || !scene.visual_prompt.trim()) {\n      errors.push(`scene ${index} has empty visual_prompt`);\n    }\n  });\n\n  const totalWords = scenes.reduce((sum, scene) => sum + countWords(scene.narration), 0);\n  if (totalWords < 1200 || totalWords > 2200) {\n    errors.push(`word count ${totalWords} outside 1200-2200 range`);\n  }\n\n  return { ok: errors.length === 0, errors, totalWords };\n}\n\nconst result = validateScript($json);\nif (!result.ok) throw new Error('script validation failed: ' + result.errors.join('; '));\nreturn [{ json: $json }];"
+      },
+      "id": "4bbe68b9-c62e-4c61-81cc-bc1ace04c654",
+      "name": "Validate Structure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const crypto = require('crypto');\nconst hash = crypto.createHash('sha256').update(JSON.stringify($json)).digest('hex');\nreturn [{ json: { ...$json, script_hash: hash } }];"
+      },
+      "id": "092a6e79-b150-4ccb-9fbf-5a5c45e1bb11",
+      "name": "Hash Script",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET script_json = $1, script_hash = $2, stage = 'SCRIPTED' WHERE id = $3",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json), $json.script_hash, $json.video_id] }}"
+        }
+      },
+      "id": "146fdb36-6c46-4164-abeb-f9ffad7ab72f",
+      "name": "Persist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Video": {
+      "main": [
+        [
+          {
+            "node": "Guard: Stage = RESEARCHED?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Stage = RESEARCHED?": {
+      "main": [
+        [
+          {
+            "node": "Generate Script (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit: Wrong Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Script (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Validate Structure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Structure": {
+      "main": [
+        [
+          {
+            "node": "Hash Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hash Script": {
+      "main": [
+        [
+          {
+            "node": "Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

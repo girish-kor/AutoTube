@@ -1,0 +1,307 @@
+{
+  "name": "13-Publish-LongForm",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "video_id"
+            }
+          ]
+        }
+      },
+      "id": "409ae976-0a72-4977-adbc-80a20e50a0fc",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM videos WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "id": "b86ee07d-3836-4868-a842-cfad589f597c",
+      "name": "Load Video",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "Guard: only proceeds if stage = 'COMPLIANCE_PASSED' (checked in the following If node); otherwise NoOp exit (docs/WORKFLOW.md Sub-Workflow Contract step 2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "COMPLIANCE_PASSED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{$json.youtube_video_id}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty"
+              }
+            }
+          ]
+        }
+      },
+      "id": "be8639b9-7675-4586-b97a-1d32f155cdb4",
+      "name": "Guard: Stage = COMPLIANCE_PASSED And Not Yet Published?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "4d3206e7-e794-43d1-9c31-3186fe27ea67",
+      "name": "Exit: Wrong Stage Or Already Published",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://youtube.googleapis.com/upload/youtube/v3/videos?part=snippet,status,contentDetails&uploadType=resumable",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"snippet\":{\"title\":\"={{$json.title}}\",\"description\":\"={{$json.description}}\",\"tags\":\"={{$json.tags}}\",\"categoryId\":\"={{$json.category_id}}\"},\"status\":{\"privacyStatus\":\"={{$env.TEST_MODE === 'true' ? 'private' : 'public'}}\",\"selfDeclaredMadeForKids\":false,\"containsSyntheticMedia\":true}}"
+      },
+      "id": "a3b42356-c7f0-4be8-a2b8-f20efcb39c2c",
+      "name": "Upload Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        260
+      ],
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "name": "youtube-oauth-CHANNEL"
+        }
+      },
+      "notes": "Media body (render_path file) attached via n8n binary-data upload, resumable/chunked per docs/YOUTUBE_API.md §4. TEST_MODE forces private uploads (docs/TESTING.md §6).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://youtube.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={{$json.id}}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "fc03d262-dda2-49c1-aa4c-834bd0a8208b",
+      "name": "Set Thumbnail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        260
+      ],
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "name": "youtube-oauth-CHANNEL"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://youtube.googleapis.com/upload/youtube/v3/captions?part=snippet",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"snippet\":{\"videoId\":\"={{$('Upload Video').first().json.id}}\",\"language\":\"en\",\"name\":\"English\"}}"
+      },
+      "id": "9cc99ba0-db93-44ba-abb2-e5dfbe6347b5",
+      "name": "Upload Captions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        440
+      ],
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "name": "youtube-oauth-CHANNEL"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE videos SET youtube_video_id = $1, stage = 'PUBLISHED', published_at = now() WHERE id = $2",
+        "options": {
+          "queryReplacement": "={{ [$('Upload Video').first().json.id, $('Load Video').first().json.video_id] }}"
+        }
+      },
+      "id": "64b476b1-a16b-42b2-87f9-8013e0b14fa1",
+      "name": "Persist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO api_usage (api_name, usage_date, units_used, unit_limit) VALUES ('youtube_data_v3', CURRENT_DATE, 2050, 10000) ON CONFLICT (api_name, usage_date) DO UPDATE SET units_used = api_usage.units_used + 2050",
+        "options": {}
+      },
+      "id": "b41b9beb-3671-4b8e-8e3d-ca6f43d38b3e",
+      "name": "Log Quota",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      },
+      "notes": "1600 (insert) + 50 (thumbnails.set) + 400 (captions.insert) = 2050 units (docs/YOUTUBE_API.md §3)."
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Video": {
+      "main": [
+        [
+          {
+            "node": "Guard: Stage = COMPLIANCE_PASSED And Not Yet Published?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard: Stage = COMPLIANCE_PASSED And Not Yet Published?": {
+      "main": [
+        [
+          {
+            "node": "Upload Video",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Exit: Wrong Stage Or Already Published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Video": {
+      "main": [
+        [
+          {
+            "node": "Set Thumbnail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Thumbnail": {
+      "main": [
+        [
+          {
+            "node": "Upload Captions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Captions": {
+      "main": [
+        [
+          {
+            "node": "Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist": {
+      "main": [
+        [
+          {
+            "node": "Log Quota",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

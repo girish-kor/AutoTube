@@ -1,0 +1,193 @@
+{
+  "name": "18-Optimization-Loop",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 4 * * 1"
+            }
+          ]
+        },
+        "timezone": "UTC"
+      },
+      "id": "e0b1e9b6-f67b-485b-abf1-86ad4a446a08",
+      "name": "Cron",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.source, v.category_id, extract(hour from v.published_at) AS publish_hour, avg(a.views) AS avg_views, avg(a.ctr) AS avg_ctr, avg(a.watch_time_minutes) AS avg_watch_time FROM analytics_daily a JOIN videos v ON v.id = a.video_id AND a.is_short = false JOIN topics t ON t.id = v.topic_id WHERE a.metric_date >= now() - interval '7 days' GROUP BY t.source, v.category_id, publish_hour",
+        "options": {}
+      },
+      "id": "94ce8d8e-edf2-4fbb-8769-5e779e774170",
+      "name": "Aggregate Performance",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        520,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM config WHERE key = 'topic_scoring_weights'",
+        "options": {}
+      },
+      "id": "c59e3254-787f-4eec-9d1a-4277dbe5921b",
+      "name": "Load Current Weights",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        780,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{$env.GEMINI_MODEL || 'gemini-2.0-flash'}}:generateContent",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"contents\":[{\"parts\":[{\"text\":\"=Given these aggregate performance stats per topic-source/category/publish-hour\\\\nbucket, and the current scoring weights, propose adjusted weights that shift\\\\nfuture selection toward higher-performing buckets. Keep all weights positive\\\\nand summing to 1.0. Bound any single weight change to +/-0.1 per run to avoid\\\\noverreacting to noise. Also propose up to 3 new few-shot title examples drawn\\\\nfrom this period's top-CTR videos for future SEO generation.\\\\n\\\\nCurrent weights: {{JSON.stringify($json.value)}}\\\\nAggregate stats: {{JSON.stringify($json.agg)}}\"}]}],\"generationConfig\":{\"responseMimeType\":\"application/json\",\"responseSchema\":{\"type\":\"object\",\"properties\":{\"topic_scoring_weights\":{\"type\":\"object\"},\"seo_prompt_examples\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"topic_scoring_weights\",\"seo_prompt_examples\"]}}}"
+      },
+      "id": "053dae55-de24-488d-aeca-1d57295e449b",
+      "name": "Recompute Weights (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        260
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "gemini-api"
+        }
+      },
+      "notes": "docs/AI_PIPELINE.md prompt/schema. Pre-flight-checked against api_usage/gemini before call; falls back to Ollama on quota exhaustion per docs/AI_PIPELINE.md §0 (fallback branch omitted here for diagram clarity, implement per that section).",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Bound-checks Gemini's proposed weight adjustments before persisting\n// (docs/AI_PIPELINE.md §8): every weight in [0,1], sum within 0.01 of 1.0,\n// and no single weight moving more than ±0.1 in one run.\nfunction boundCheckWeights(currentWeights, proposedWeights, maxDeltaPerRun) {\n  const delta = maxDeltaPerRun === undefined ? 0.1 : maxDeltaPerRun;\n  const keys = Object.keys(currentWeights);\n  const errors = [];\n  let sum = 0;\n\n  for (const key of keys) {\n    const value = proposedWeights[key];\n    if (typeof value !== \"number\" || value < 0 || value > 1) {\n      errors.push(`${key} value ${value} outside [0,1]`);\n      continue;\n    }\n    const change = Math.abs(value - currentWeights[key]);\n    if (change > delta) {\n      errors.push(`${key} changed by ${change.toFixed(3)}, exceeds +/-${delta} per run`);\n    }\n    sum += value;\n  }\n\n  if (Math.abs(sum - 1.0) > 0.01) {\n    errors.push(`weights sum to ${sum.toFixed(3)}, deviates from 1.0 by more than 0.01`);\n  }\n\n  return { ok: errors.length === 0, errors };\n}\n\nconst current = $('Load Current Weights').first().json.value;\nconst result = boundCheckWeights(current, $json.topic_scoring_weights);\nif (!result.ok) throw new Error('weight adjustment rejected: ' + result.errors.join('; '));\nreturn [{ json: $json }];"
+      },
+      "id": "7fa8486f-3f99-438b-bb05-521f6ce99622",
+      "name": "Bound-Check Weights",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE config SET value = $1, updated_at = now() WHERE key = 'topic_scoring_weights'; UPDATE config SET value = $2, updated_at = now() WHERE key = 'seo_prompt_examples'",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.topic_scoring_weights), JSON.stringify($json.seo_prompt_examples)] }}"
+        }
+      },
+      "id": "54806406-a578-47cf-9a1e-27a386c6d87f",
+      "name": "Persist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1560,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "name": "postgres-autotube"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Cron": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Performance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Performance": {
+      "main": [
+        [
+          {
+            "node": "Load Current Weights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Current Weights": {
+      "main": [
+        [
+          {
+            "node": "Recompute Weights (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recompute Weights (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Bound-Check Weights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bound-Check Weights": {
+      "main": [
+        [
+          {
+            "node": "Persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
