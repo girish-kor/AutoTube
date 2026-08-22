@@ -1,5 +1,5 @@
 fastapi==0.141.1
-uvicorn[standard]==0.52.1
+uvicorn[standard]==0.52.3
 pydantic==2.13.4
 httpx==0.28.1
 edge-tts==7.2.8
